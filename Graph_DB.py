@@ -1,11 +1,14 @@
-import os, json
+import os, json, warnings
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 load_dotenv()
 
+warnings.filterwarnings("ignore")
+
 driver = GraphDatabase.driver(
     os.environ["NEO4J_URI"],
-    auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"])
+    auth=(os.environ["NEO4J_USER"], os.environ["NEO4J_PASSWORD"]),
+    
 )
 
 SCHEMA_CYPHER = """
@@ -15,7 +18,7 @@ CREATE CONSTRAINT test_name IF NOT EXISTS FOR (t:Test) REQUIRE t.name IS UNIQUE;
 CREATE CONSTRAINT medicine_name IF NOT EXISTS FOR (m:Medicine) REQUIRE m.name IS UNIQUE;
 """
 
-UPSERT_EVENT = """
+EVENT_CYPHER = """
 WITH $event AS ev
 MERGE (p:Patient {id: ev.patient_id})
   ON CREATE SET p.name = ev.name, p.dob = ev.dob
@@ -47,7 +50,11 @@ WITH e, enc
 
 FOREACH (pr IN coalesce(enc.prescriptions, []) |
   MERGE (m:Medicine {name: pr.medicine_name})
-  MERGE (e)-[:PRESCRIBED {dosage: pr.dosage, frequency: pr.frequency, duration: pr.duration, notes: pr.notes}]->(m)
+  MERGE (e)-[rel:PRESCRIBED]->(m)
+  SET rel.dosage    = coalesce(pr.dosage, rel.dosage),
+      rel.frequency = coalesce(pr.frequency, rel.frequency),
+      rel.duration  = coalesce(pr.duration, rel.duration),
+      rel.notes     = coalesce(pr.notes, rel.notes)
 );
 """
 
@@ -62,7 +69,7 @@ def load_events(path="events.jsonl"):
     with driver.session() as s, open(path, "r", encoding="utf-8") as f:
         for line in f:
             ev = json.loads(line)
-            s.run(UPSERT_EVENT, event=ev)
+            s.run(EVENT_CYPHER, event=ev)
     print("Graph load complete.")
 
 if __name__ == "__main__":
